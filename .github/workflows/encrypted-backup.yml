@@ -1,0 +1,61 @@
+name: Encrypted Atlas database backup
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlas-database-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Verify required secrets
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.ATLAS_DATABASE_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.ATLAS_BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          test -n "$DATABASE_URL" || { echo "ATLAS_DATABASE_URL secret missing"; exit 1; }
+          test -n "$BACKUP_PASSPHRASE" || { echo "ATLAS_BACKUP_PASSPHRASE secret missing"; exit 1; }
+          test "${#BACKUP_PASSPHRASE}" -ge 24 || { echo "Backup passphrase must be at least 24 characters"; exit 1; }
+
+      - name: Export and encrypt database backup
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.ATLAS_DATABASE_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.ATLAS_BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/atlas-backup" "$RUNNER_TEMP/atlas-encrypted"
+          cd "$RUNNER_TEMP/atlas-backup"
+          supabase db dump --db-url "$DATABASE_URL" --role-only -f roles.sql
+          supabase db dump --db-url "$DATABASE_URL" -f schema.sql
+          supabase db dump --db-url "$DATABASE_URL" --data-only --use-copy -f data.sql
+          for file in roles.sql schema.sql data.sql; do test -s "$file" || { echo "Missing or empty export: $file"; exit 1; }; done
+          sha256sum roles.sql schema.sql data.sql > SHA256SUMS
+          printf 'Atlas AI-Coworker Supabase pre-deployment backup; UTC: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > README.txt
+          tar -czf "$RUNNER_TEMP/atlas-backup.tar.gz" roles.sql schema.sql data.sql SHA256SUMS README.txt
+          printf '%s' "$BACKUP_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --symmetric --cipher-algo AES256 --s2k-mode 3 --s2k-count 65011712 --output "$RUNNER_TEMP/atlas-encrypted/atlas-backup.tar.gz.gpg" "$RUNNER_TEMP/atlas-backup.tar.gz"
+          test -s "$RUNNER_TEMP/atlas-encrypted/atlas-backup.tar.gz.gpg"
+          echo "Encrypted backup created; plaintext is not uploaded."
+
+      - name: Upload encrypted artifact only
+        uses: actions/upload-artifact@v4
+        with:
+          name: atlas-encrypted-db-backup
+          path: ${{ runner.temp }}/atlas-encrypted/atlas-backup.tar.gz.gpg
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
