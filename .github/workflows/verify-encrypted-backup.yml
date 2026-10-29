@@ -1,0 +1,48 @@
+name: Verify encrypted Atlas backup
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download original encrypted backup
+        uses: actions/download-artifact@v4
+        with:
+          name: atlas-encrypted-db-backup
+          run-id: 40778258676
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/encrypted
+
+      - name: Decrypt and inspect privately
+        shell: bash
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.ATLAS_BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$BACKUP_PASSPHRASE" || { echo "Missing passphrase secret"; exit 1; }
+          cd "$RUNNER_TEMP"
+          test -s encrypted/atlas-backup.tar.gz.gpg
+          mkdir -p extracted
+          printf '%s' "$BACKUP_PASSPHRASE" | gpg --batch --yes --quiet --pinentry-mode loopback --passphrase-fd 0 --decrypt --output backup.tar.gz encrypted/atlas-backup.tar.gz.gpg
+          tar -tzf backup.tar.gz > archive-index.txt
+          for f in roles.sql schema.sql data.sql SHA256SUMS README.txt; do
+            grep -Fxq "$f" archive-index.txt || { echo "Missing archive member: $f"; exit 1; }
+          done
+          tar -xzf backup.tar.gz -C extracted --no-same-owner --no-same-permissions
+          cd extracted
+          sha256sum --status -c SHA256SUMS || { echo "Checksum mismatch"; exit 1; }
+          for f in roles.sql schema.sql data.sql; do test -s "$f" || { echo "Empty SQL export: $f"; exit 1; }; done
+          echo "PASS: GPG decryption, expected archive members, nonempty SQL exports, SHA-256 checksums."
+          echo "NOTE: SQL restoration into a disposable PostgreSQL instance has NOT been tested."
+      - name: Remove decrypted temporary files
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "$RUNNER_TEMP/extracted" "$RUNNER_TEMP/backup.tar.gz" "$RUNNER_TEMP/archive-index.txt"
