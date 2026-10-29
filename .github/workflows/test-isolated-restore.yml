@@ -69,6 +69,27 @@ jobs:
           test "$PGHOST" = "127.0.0.1"
           test "$PGDATABASE" = "atlas_restore_test"
           "$RUNNER_TEMP/psql" -X -qAt -c 'SELECT 1' | grep -qx 1
+          # Create ordinary NOLOGIN placeholders only in this disposable database.
+          # Supabase SQL may reference these roles in ownership and grants.
+          "$RUNNER_TEMP/psql" -X -v ON_ERROR_STOP=1 -q <<'SQL'
+          DO $
+          DECLARE role_name text;
+          BEGIN
+            FOREACH role_name IN ARRAY ARRAY[
+              'anon', 'authenticated', 'service_role', 'authenticator',
+              'supabase_admin', 'supabase_auth_admin',
+              'supabase_storage_admin', 'supabase_functions_admin',
+              'supabase_realtime_admin', 'dashboard_user'
+            ] LOOP
+              IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = role_name) THEN
+                EXECUTE format('CREATE ROLE %I NOLOGIN', role_name);
+              END IF;
+            END LOOP;
+          END
+          $;
+          SQL
+          # Supabase-specific extensions and managed infrastructure may still
+          # prevent restore in generic PostgreSQL. Fail strictly; do not skip SQL.
           if ! "$RUNNER_TEMP/psql" -X --single-transaction -v ON_ERROR_STOP=1 -q \
               -f roles.sql -f schema.sql \
               -c 'SET session_replication_role = replica' \
