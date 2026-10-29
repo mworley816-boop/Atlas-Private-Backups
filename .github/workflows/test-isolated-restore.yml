@@ -33,10 +33,15 @@ jobs:
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/encrypted
 
-      - name: Install local PostgreSQL client
+      - name: Use PostgreSQL 17 client from local service image
+        shell: bash
         run: |
-          sudo apt-get update -qq >/dev/null
-          sudo apt-get install -y -qq postgresql-client-17 >/dev/null
+          set -euo pipefail
+          docker create --name atlas-pg-client postgres:17 >/dev/null
+          docker cp atlas-pg-client:/usr/lib/postgresql/17/bin/psql "$RUNNER_TEMP/psql"
+          chmod 700 "$RUNNER_TEMP/psql"
+          docker rm atlas-pg-client >/dev/null
+          "$RUNNER_TEMP/psql" --version
 
       - name: Decrypt and restore into local-only PostgreSQL
         shell: bash
@@ -63,8 +68,8 @@ jobs:
           # Explicit loopback host, local service database, and TLS disabled prevent accidental remote restoration.
           test "$PGHOST" = "127.0.0.1"
           test "$PGDATABASE" = "atlas_restore_test"
-          psql -X -qAt -c 'SELECT 1' | grep -qx 1
-          if ! psql -X --single-transaction -v ON_ERROR_STOP=1 -q \
+          "$RUNNER_TEMP/psql" -X -qAt -c 'SELECT 1' | grep -qx 1
+          if ! "$RUNNER_TEMP/psql" -X --single-transaction -v ON_ERROR_STOP=1 -q \
               -f roles.sql -f schema.sql \
               -c 'SET session_replication_role = replica' \
               -f data.sql > "$RUNNER_TEMP/restore-output.log" 2>&1; then
@@ -73,7 +78,7 @@ jobs:
             echo "A plain PostgreSQL instance may lack Supabase-managed schemas/extensions; failure does not imply the archive is corrupt."
             exit 1
           fi
-          psql -X -qAt -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'" > "$RUNNER_TEMP/table-count"
+          "$RUNNER_TEMP/psql" -X -qAt -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'" > "$RUNNER_TEMP/table-count"
           echo "PASS: strict SQL restore completed in isolated local PostgreSQL."
           echo "Public schema base tables restored: $(cat "$RUNNER_TEMP/table-count")"
           echo "NOTE: This does not validate Supabase managed services, Storage objects, or a full Supabase project recovery."
