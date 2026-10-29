@@ -124,17 +124,18 @@ jobs:
                   fi
                   if [ -n "$denied_name" ]; then
                     echo "Diagnostic: first denied table identifier captured privately."
-                    # A bare PostgreSQL permission error may omit schema.
-                    # Classify matching COPY targets without printing identifiers.
-                    match_lines=$(awk -v t="$denied_name" '$1=="COPY" {name=$2; sub(/.*\\./,"",name); gsub(/"/,"",name); if(name==t) print $2}' data.sql)
-                    if [ -z "$match_lines" ]; then
-                      echo "Denied-table classification: no matching COPY target."
-                    elif printf '%s\\n' "$match_lines" | grep -Eq '^(auth|storage|realtime|supabase_functions|vault|extensions|graphql|_realtime)\\.'; then
-                      echo "Denied-table classification: Supabase-managed schema involved."
-                    elif printf '%s\\n' "$match_lines" | grep -Eq '^public\\.'; then
-                      echo "Denied-table classification: public application schema involved."
+                    # Use a parameterized catalog query, with no private identifiers logged.
+                    catalog_result=$(docker run --rm --network host \
+                      -e PGPASSWORD="$PGPASSWORD" -e DENIED_TABLE="$denied_name" postgres:17 \
+                      sh -c 'printf "%s\\n" "SELECT CASE WHEN n.nspname IN (\x27auth\x27,\x27storage\x27,\x27realtime\x27,\x27supabase_functions\x27,\x27vault\x27,\x27extensions\x27,\x27graphql\x27,\x27_realtime\x27) THEN \x27managed\x27 WHEN n.nspname=\x27public\x27 THEN \x27public\x27 ELSE \x27other\x27 END FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relname = :\x27target\x27 AND c.relkind IN (\x27r\x27,\x27p\x27) ORDER BY 1;" | psql -X -h 127.0.0.1 -p 54322 -U postgres -d postgres -qAt -v ON_ERROR_STOP=1 -v target="$DENIED_TABLE" 2>/dev/null' || true)
+                    if [ -z "$catalog_result" ]; then
+                      echo "Denied-table catalog classification: unavailable or no match."
+                    elif printf '%s\\n' "$catalog_result" | grep -qx managed; then
+                      echo "Denied-table catalog classification: Supabase-managed table."
+                    elif printf '%s\\n' "$catalog_result" | grep -qx public; then
+                      echo "Denied-table catalog classification: public application table."
                     else
-                      echo "Denied-table classification: other or ambiguous schema."
+                      echo "Denied-table catalog classification: other or ambiguous."
                     fi
                   fi
                 fi
