@@ -77,13 +77,17 @@ jobs:
             echo "FAIL: schema restore; see private runner diagnostics (not uploaded)."
             exit 1
           fi
+          # Temporarily relax row-level security only inside this disposable
+          # local Supabase database. The backup's application RLS definitions
+          # remain intact; this affects only the import session.
           echo "Starting strict data restore..."
           if ! docker run --rm --network host \
             -e PGPASSWORD="$PGPASSWORD" \
             -v "$RUNNER_TEMP/restore-files:/restore:ro" postgres:17 \
             psql -X -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
             -v ON_ERROR_STOP=1 --single-transaction -q \
-            -c 'SET session_replication_role = replica' -f /restore/data.sql \
+            -c 'SET session_replication_role = replica' \
+            -c 'SET row_security = off' -f /restore/data.sql \
             > "$RUNNER_TEMP/data-restore.log" 2>&1; then
             echo "FAIL: data restore in disposable Supabase."
             # Report only a recognized SQLSTATE (five-character code), never
