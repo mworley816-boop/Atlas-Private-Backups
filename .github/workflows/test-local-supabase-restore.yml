@@ -1,0 +1,106 @@
+name: Test Atlas restore in isolated local Supabase
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  local-supabase-restore:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: "54322"
+      PGUSER: postgres
+      PGDATABASE: postgres
+      PGPASSWORD: postgres
+      PGSSLMODE: disable
+    steps:
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start disposable local Supabase stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/atlas-local"
+          cd "$RUNNER_TEMP/atlas-local"
+          supabase init --yes
+          supabase start > "$RUNNER_TEMP/supabase-start.log" 2>&1 || {
+            echo "FAIL: isolated local Supabase stack could not start."
+            exit 1
+          }
+          docker run --rm --network host -e PGPASSWORD="$PGPASSWORD" postgres:17 \
+            psql -X -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -qAt -c 'SELECT 1' | grep -qx 1
+          echo "PASS: disposable Supabase database started on loopback."
+
+      - name: Download verified encrypted backup
+        uses: actions/download-artifact@v4
+        with:
+          name: atlas-encrypted-db-backup
+          run-id: 40778258676
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/encrypted
+
+      - name: Restore application schema and data into local Supabase
+        shell: bash
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.ATLAS_BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$BACKUP_PASSPHRASE"
+          mkdir -p "$RUNNER_TEMP/restore-files"
+          printf '%s' "$BACKUP_PASSPHRASE" | gpg --batch --yes --quiet --pinentry-mode loopback --passphrase-fd 0 \
+            --decrypt --output "$RUNNER_TEMP/backup.tar.gz" "$RUNNER_TEMP/encrypted/atlas-backup.tar.gz.gpg"
+          tar -xzf "$RUNNER_TEMP/backup.tar.gz" -C "$RUNNER_TEMP/restore-files" --no-same-owner --no-same-permissions
+          cd "$RUNNER_TEMP/restore-files"
+          sha256sum --status -c SHA256SUMS
+          for f in roles.sql schema.sql data.sql; do test -s "$f"; done
+          # The local Supabase stack already provisions managed roles and schemas.
+          # roles.sql is integrity-checked but not executed to avoid duplicate-role errors.
+          # No production database URL or token is passed to this job.
+          test "$PGHOST" = 127.0.0.1
+          test "$PGPORT" = 54322
+          test "$PGDATABASE" = postgres
+          echo "Starting strict application schema restore against disposable local Supabase..."
+          if ! docker run --rm --network host \
+            -e PGPASSWORD="$PGPASSWORD" \
+            -v "$RUNNER_TEMP/restore-files:/restore:ro" postgres:17 \
+            psql -X -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
+            -v ON_ERROR_STOP=1 --single-transaction -q -f /restore/schema.sql \
+            > "$RUNNER_TEMP/schema-restore.log" 2>&1; then
+            echo "FAIL: schema restore; see private runner diagnostics (not uploaded)."
+            exit 1
+          fi
+          echo "Starting strict data restore..."
+          if ! docker run --rm --network host \
+            -e PGPASSWORD="$PGPASSWORD" \
+            -v "$RUNNER_TEMP/restore-files:/restore:ro" postgres:17 \
+            psql -X -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
+            -v ON_ERROR_STOP=1 --single-transaction -q \
+            -c 'SET session_replication_role = replica' -f /restore/data.sql \
+            > "$RUNNER_TEMP/data-restore.log" 2>&1; then
+            echo "FAIL: data restore; see private runner diagnostics (not uploaded)."
+            exit 1
+          fi
+          docker run --rm --network host -e PGPASSWORD="$PGPASSWORD" postgres:17 \
+            psql -X -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
+            -qAt -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'" \
+            > "$RUNNER_TEMP/public-table-count"
+          echo "PASS: application schema and data SQL restored to disposable local Supabase."
+          echo "Public tables: $(cat "$RUNNER_TEMP/public-table-count")"
+          echo "LIMITATION: roles.sql was not executed; Supabase managed services, Storage files, and end-to-end recovery are not validated."
+
+      - name: Destroy disposable environment and plaintext
+        if: always()
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/atlas-local" 2>/dev/null && supabase stop --no-backup >/dev/null 2>&1 || true
+          rm -rf "$RUNNER_TEMP/restore-files" "$RUNNER_TEMP/backup.tar.gz" \
+            "$RUNNER_TEMP/schema-restore.log" "$RUNNER_TEMP/data-restore.log" \
+            "$RUNNER_TEMP/supabase-start.log" "$RUNNER_TEMP/public-table-count"
