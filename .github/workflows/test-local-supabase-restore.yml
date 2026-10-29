@@ -104,6 +104,11 @@ jobs:
                 echo "Permission subtype: schema access."
               elif grep -Eqi 'permission denied for table|must be owner of table' "$RUNNER_TEMP/data-restore.log"; then
                 echo "Permission subtype: table access or ownership."
+                if grep -Eqi 'must be owner of table' "$RUNNER_TEMP/data-restore.log"; then
+                  echo "Table failure detail: ownership required."
+                elif grep -Eqi 'permission denied for table' "$RUNNER_TEMP/data-restore.log"; then
+                  echo "Table failure detail: access privilege required."
+                fi
               elif grep -Eqi 'permission denied for sequence' "$RUNNER_TEMP/data-restore.log"; then
                 echo "Permission subtype: sequence access."
               elif grep -Eqi 'permission denied to set parameter|permission denied to set role|must be superuser|superuser' "$RUNNER_TEMP/data-restore.log"; then
