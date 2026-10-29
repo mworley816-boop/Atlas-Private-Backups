@@ -124,6 +124,18 @@ jobs:
                   fi
                   if [ -n "$denied_name" ]; then
                     echo "Diagnostic: first denied table identifier captured privately."
+                    # A bare PostgreSQL permission error may omit schema.
+                    # Classify matching COPY targets without printing identifiers.
+                    match_lines=$(awk -v t="$denied_name" '$1=="COPY" {name=$2; sub(/.*\\./,"",name); gsub(/"/,"",name); if(name==t) print $2}' data.sql)
+                    if [ -z "$match_lines" ]; then
+                      echo "Denied-table classification: no matching COPY target."
+                    elif printf '%s\\n' "$match_lines" | grep -Eq '^(auth|storage|realtime|supabase_functions|vault|extensions|graphql|_realtime)\\.'; then
+                      echo "Denied-table classification: Supabase-managed schema involved."
+                    elif printf '%s\\n' "$match_lines" | grep -Eq '^public\\.'; then
+                      echo "Denied-table classification: public application schema involved."
+                    else
+                      echo "Denied-table classification: other or ambiguous schema."
+                    fi
                   fi
                 fi
               elif grep -Eqi 'permission denied for sequence' "$RUNNER_TEMP/data-restore.log"; then
