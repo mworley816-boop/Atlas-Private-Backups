@@ -85,7 +85,28 @@ jobs:
             -v ON_ERROR_STOP=1 --single-transaction -q \
             -c 'SET session_replication_role = replica' -f /restore/data.sql \
             > "$RUNNER_TEMP/data-restore.log" 2>&1; then
-            echo "FAIL: data restore; see private runner diagnostics (not uploaded)."
+            echo "FAIL: data restore in disposable Supabase."
+            # Report only a recognized SQLSTATE (five-character code), never
+            # SQL statements, identifiers, or database values.
+            code=$(grep -Eo 'SQL state: [0-9A-Z]{5}' "$RUNNER_TEMP/data-restore.log" | head -n 1 | cut -d' ' -f3 || true)
+            if [ -n "$code" ]; then echo "SQLSTATE: $code"; fi
+            # The failure's table/column names and input lines are private.
+            # A generic failure category is safe to report publicly.
+            if grep -Eqi 'duplicate key value violates unique constraint' "$RUNNER_TEMP/data-restore.log"; then
+              echo "Category: duplicate-key conflict in pre-populated Supabase tables."
+            elif grep -Eqi 'violates foreign key constraint' "$RUNNER_TEMP/data-restore.log"; then
+              echo "Category: foreign-key dependency."
+            elif grep -Eqi 'already exists|duplicate object' "$RUNNER_TEMP/data-restore.log"; then
+              echo "Category: object already exists."
+            elif grep -Eqi 'permission denied|must be owner' "$RUNNER_TEMP/data-restore.log"; then
+              echo "Category: database permissions."
+            elif grep -Eqi 'does not exist' "$RUNNER_TEMP/data-restore.log"; then
+              echo "Category: missing dependency."
+            elif grep -Eqi 'COPY .* line [0-9]+' "$RUNNER_TEMP/data-restore.log"; then
+              echo "Category: data COPY/import error."
+            else
+              echo "Category: other SQL restore failure (details suppressed)."
+            fi
             exit 1
           fi
           docker run --rm --network host -e PGPASSWORD="$PGPASSWORD" postgres:17 \
