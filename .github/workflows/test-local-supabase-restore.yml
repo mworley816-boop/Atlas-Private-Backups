@@ -187,18 +187,36 @@ jobs:
             # Independent diagnostic: test public-schema COPY data only.
             # The failed full import was transactional, so it left no partial rows.
             # Never publish raw SQL, identifiers, or imported records.
-            awk '
-              /^COPY / {
-                keep = ($2 ~ /^public\\./ || $2 ~ /^"public"\\./)
-                if (keep) count++
-              }
-              keep { print }
-              /^\\\\\.$/ { keep = 0 }
-              END { if (count == 0) exit 3 }
-            ' "$RUNNER_TEMP/restore-files/data.sql" > "$RUNNER_TEMP/restore-files/public-only.sql" || {
-              echo "Application-only diagnostic: no usable public COPY blocks."
+            python3 - "$RUNNER_TEMP/restore-files/data.sql" "$RUNNER_TEMP/restore-files/public-only.sql" <<'PY'
+          import sys
+          source, target = sys.argv[1:]
+          copy_count = public_count = other_count = 0
+          in_copy = keep = False
+          with open(source, encoding="utf-8", errors="replace") as src, open(target, "w", encoding="utf-8") as dst:
+              for line in src:
+                  if not in_copy and line.startswith("COPY "):
+                      copy_count += 1
+                      table = line.split(None, 2)[1]
+                      keep = table.startswith(("public.", '"public".'))
+                      public_count += int(keep)
+                      other_count += int(not keep)
+                      in_copy = True
+                  if in_copy and keep:
+                      dst.write(line)
+                  if in_copy and line.rstrip("\\r\\n") == r"\\.":
+                      in_copy = keep = False
+          print(f"Backup SQL structure: COPY blocks={copy_count}; public={public_count}; other={other_count}.")
+          if copy_count == 0:
+              print("Application-only diagnostic: no COPY-format blocks found.")
+          elif public_count == 0:
+              print("Application-only diagnostic: no public-schema COPY blocks found.")
+          else:
+              print("Application-only diagnostic: public-schema COPY blocks extracted.")
+          PY
+            if ! grep -q '^COPY ' "$RUNNER_TEMP/restore-files/public-only.sql"; then
+              echo "Application-only restore skipped: no public COPY blocks."
               exit 1
-            }
+            fi
             if docker run --rm --network host \
               -e PGPASSWORD="$PGPASSWORD" \
               -v "$RUNNER_TEMP/restore-files:/restore:ro" postgres:17 \
