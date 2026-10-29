@@ -1,0 +1,84 @@
+name: Test Atlas backup restore in isolated PostgreSQL
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  restore-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: local-test-only
+          POSTGRES_DB: atlas_restore_test
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d atlas_restore_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - name: Download exact verified encrypted backup
+        uses: actions/download-artifact@v4
+        with:
+          name: atlas-encrypted-db-backup
+          run-id: 40778258676
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/encrypted
+
+      - name: Install local PostgreSQL client
+        run: |
+          sudo apt-get update -qq >/dev/null
+          sudo apt-get install -y -qq postgresql-client-17 >/dev/null
+
+      - name: Decrypt and restore into local-only PostgreSQL
+        shell: bash
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.ATLAS_BACKUP_PASSPHRASE }}
+          PGHOST: 127.0.0.1
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGPASSWORD: local-test-only
+          PGDATABASE: atlas_restore_test
+          PGSSLMODE: disable
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$BACKUP_PASSPHRASE" || { echo "FAIL: backup passphrase missing"; exit 1; }
+          test -s "$RUNNER_TEMP/encrypted/atlas-backup.tar.gz.gpg"
+          mkdir -p "$RUNNER_TEMP/restore-files"
+          printf '%s' "$BACKUP_PASSPHRASE" | gpg --batch --yes --quiet --pinentry-mode loopback --passphrase-fd 0 --decrypt --output "$RUNNER_TEMP/backup.tar.gz" "$RUNNER_TEMP/encrypted/atlas-backup.tar.gz.gpg"
+          tar -xzf "$RUNNER_TEMP/backup.tar.gz" -C "$RUNNER_TEMP/restore-files" --no-same-owner --no-same-permissions
+          cd "$RUNNER_TEMP/restore-files"
+          sha256sum --status -c SHA256SUMS
+          for file in roles.sql schema.sql data.sql; do test -s "$file"; done
+          # This job never receives ATLAS_DATABASE_URL or any production credentials.
+          # Explicit loopback host, local service database, and TLS disabled prevent accidental remote restoration.
+          test "$PGHOST" = "127.0.0.1"
+          test "$PGDATABASE" = "atlas_restore_test"
+          psql -X -qAt -c 'SELECT 1' | grep -qx 1
+          if ! psql -X --single-transaction -v ON_ERROR_STOP=1 -q \
+              -f roles.sql -f schema.sql \
+              -c 'SET session_replication_role = replica' \
+              -f data.sql > "$RUNNER_TEMP/restore-output.log" 2>&1; then
+            echo "FAIL: strict SQL restore into isolated PostgreSQL did not complete."
+            echo "Details intentionally withheld from public logs to protect private database content."
+            echo "A plain PostgreSQL instance may lack Supabase-managed schemas/extensions; failure does not imply the archive is corrupt."
+            exit 1
+          fi
+          psql -X -qAt -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'" > "$RUNNER_TEMP/table-count"
+          echo "PASS: strict SQL restore completed in isolated local PostgreSQL."
+          echo "Public schema base tables restored: $(cat "$RUNNER_TEMP/table-count")"
+          echo "NOTE: This does not validate Supabase managed services, Storage objects, or a full Supabase project recovery."
+      - name: Remove decrypted temporary files
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "$RUNNER_TEMP/restore-files" "$RUNNER_TEMP/backup.tar.gz" "$RUNNER_TEMP/restore-output.log" "$RUNNER_TEMP/table-count"
