@@ -100,6 +100,19 @@ jobs:
               echo "Category: object already exists."
             elif grep -Eqi 'permission denied|must be owner' "$RUNNER_TEMP/data-restore.log"; then
               echo "Category: database permissions."
+              if grep -Eqi 'permission denied for schema' "$RUNNER_TEMP/data-restore.log"; then
+                echo "Permission subtype: schema access."
+              elif grep -Eqi 'permission denied for table|must be owner of table' "$RUNNER_TEMP/data-restore.log"; then
+                echo "Permission subtype: table access or ownership."
+              elif grep -Eqi 'permission denied for sequence' "$RUNNER_TEMP/data-restore.log"; then
+                echo "Permission subtype: sequence access."
+              elif grep -Eqi 'permission denied to set parameter|permission denied to set role|must be superuser|superuser' "$RUNNER_TEMP/data-restore.log"; then
+                echo "Permission subtype: privileged session operation."
+              elif grep -Eqi 'permission denied for function' "$RUNNER_TEMP/data-restore.log"; then
+                echo "Permission subtype: function access."
+              else
+                echo "Permission subtype: unspecified database privilege."
+              fi
             elif grep -Eqi 'does not exist' "$RUNNER_TEMP/data-restore.log"; then
               echo "Category: missing dependency."
             elif grep -Eqi 'COPY .* line [0-9]+' "$RUNNER_TEMP/data-restore.log"; then
