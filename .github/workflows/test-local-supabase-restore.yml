@@ -151,17 +151,17 @@ jobs:
                     fi
                     if [ -z "$catalog_result" ]; then
                       echo "Denied-table catalog classification: unavailable or no match."
-                    elif printf '%s\\n' "$catalog_result" | grep -qx managed; then
+                    elif printf '%s\n' "$catalog_result" | grep -qx managed; then
                       echo "Denied-table catalog classification: Supabase-managed table."
-                    elif printf '%s\\n' "$catalog_result" | grep -qx public; then
+                    elif printf '%s\n' "$catalog_result" | grep -qx public; then
                       echo "Denied-table catalog classification: public application table."
-                    elif printf '%s\\n' "$catalog_result" | grep -qx multiple-matches; then
+                    elif printf '%s\n' "$catalog_result" | grep -qx multiple-matches; then
                       echo "Denied-table catalog classification: multiple schemas share table name."
-                    elif printf '%s\\n' "$catalog_result" | grep -qx no-match; then
+                    elif printf '%s\n' "$catalog_result" | grep -qx no-match; then
                       echo "Denied-table catalog classification: no matching table."
-                    elif printf '%s\\n' "$catalog_result" | grep -qx system; then
+                    elif printf '%s\n' "$catalog_result" | grep -qx system; then
                       echo "Denied-table catalog classification: PostgreSQL system schema."
-                    elif printf '%s\\n' "$catalog_result" | grep -qx other; then
+                    elif printf '%s\n' "$catalog_result" | grep -qx other; then
                       echo "Denied-table catalog classification: other non-public schema."
                     else
                       echo "Denied-table catalog classification: unexpected diagnostic output."
