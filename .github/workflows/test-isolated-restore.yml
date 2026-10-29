@@ -72,7 +72,7 @@ jobs:
           # Create ordinary NOLOGIN placeholders only in this disposable database.
           # Supabase SQL may reference these roles in ownership and grants.
           "$RUNNER_TEMP/psql" -X -v ON_ERROR_STOP=1 -q <<'SQL'
-          DO $
+          DO $body$
           DECLARE role_name text;
           BEGIN
             FOREACH role_name IN ARRAY ARRAY[
@@ -86,7 +86,7 @@ jobs:
               END IF;
             END LOOP;
           END
-          $;
+          $body$;
           SQL
           # Supabase-specific extensions and managed infrastructure may still
           # prevent restore in generic PostgreSQL. Fail strictly; do not skip SQL.
