@@ -184,6 +184,34 @@ jobs:
             else
               echo "Category: other SQL restore failure (details suppressed)."
             fi
+            # Independent diagnostic: test public-schema COPY data only.
+            # The failed full import was transactional, so it left no partial rows.
+            # Never publish raw SQL, identifiers, or imported records.
+            awk '
+              /^COPY / {
+                keep = ($2 ~ /^public\\./ || $2 ~ /^"public"\\./)
+                if (keep) count++
+              }
+              keep { print }
+              /^\\\\\.$/ { keep = 0 }
+              END { if (count == 0) exit 3 }
+            ' "$RUNNER_TEMP/restore-files/data.sql" > "$RUNNER_TEMP/restore-files/public-only.sql" || {
+              echo "Application-only diagnostic: no usable public COPY blocks."
+              exit 1
+            }
+            if docker run --rm --network host \
+              -e PGPASSWORD="$PGPASSWORD" \
+              -v "$RUNNER_TEMP/restore-files:/restore:ro" postgres:17 \
+              psql -X -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
+              -v ON_ERROR_STOP=1 --single-transaction -q \
+              -c 'SET session_replication_role = replica' \
+              -c 'SET row_security = off' -f /restore/public-only.sql \
+              > "$RUNNER_TEMP/public-only-restore.log" 2>&1; then
+              echo "PASS: public-schema COPY data imported into disposable Supabase."
+              echo "LIMITATION: managed-schema data, sequence values, and complete recovery not verified."
+            else
+              echo "FAIL: public-schema COPY data import in disposable Supabase."
+            fi
             exit 1
           fi
           docker run --rm --network host -e PGPASSWORD="$PGPASSWORD" postgres:17 \
@@ -200,5 +228,5 @@ jobs:
         run: |
           cd "$RUNNER_TEMP/atlas-local" 2>/dev/null && supabase stop --no-backup >/dev/null 2>&1 || true
           rm -rf "$RUNNER_TEMP/restore-files" "$RUNNER_TEMP/backup.tar.gz" \
-            "$RUNNER_TEMP/schema-restore.log" "$RUNNER_TEMP/data-restore.log" \
+            "$RUNNER_TEMP/schema-restore.log" "$RUNNER_TEMP/data-restore.log" "$RUNNER_TEMP/public-only-restore.log" \
             "$RUNNER_TEMP/supabase-start.log" "$RUNNER_TEMP/public-table-count"
