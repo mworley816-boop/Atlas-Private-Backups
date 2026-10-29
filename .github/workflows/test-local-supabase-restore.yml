@@ -124,10 +124,29 @@ jobs:
                   fi
                   if [ -n "$denied_name" ]; then
                     echo "Diagnostic: first denied table identifier captured privately."
-                    # Use a parameterized catalog query, with no private identifiers logged.
+                    # Run a real SQL file (avoids shell quote-escaping errors).
+                    # Query catalogs only, never user rows.
+                    cat > "$RUNNER_TEMP/restore-files/classify.sql" <<'SQL'
+          SELECT CASE
+            WHEN n.nspname IN ('auth','storage','realtime','supabase_functions','vault','extensions','graphql','_realtime') THEN 'managed'
+            WHEN n.nspname = 'public' THEN 'public'
+            ELSE 'other'
+          END
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE c.relname = :'target' AND c.relkind IN ('r','p')
+          ORDER BY 1;
+          SQL
+                    catalog_status=0
                     catalog_result=$(docker run --rm --network host \
-                      -e PGPASSWORD="$PGPASSWORD" -e DENIED_TABLE="$denied_name" postgres:17 \
-                      sh -c 'printf "%s\\n" "SELECT CASE WHEN n.nspname IN (\x27auth\x27,\x27storage\x27,\x27realtime\x27,\x27supabase_functions\x27,\x27vault\x27,\x27extensions\x27,\x27graphql\x27,\x27_realtime\x27) THEN \x27managed\x27 WHEN n.nspname=\x27public\x27 THEN \x27public\x27 ELSE \x27other\x27 END FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relname = :\x27target\x27 AND c.relkind IN (\x27r\x27,\x27p\x27) ORDER BY 1;" | psql -X -h 127.0.0.1 -p 54322 -U postgres -d postgres -qAt -v ON_ERROR_STOP=1 -v target="$DENIED_TABLE" 2>/dev/null' || true)
+                      -e PGPASSWORD="$PGPASSWORD" -e DENIED_TABLE="$denied_name" \
+                      -v "$RUNNER_TEMP/restore-files:/restore:ro" postgres:17 \
+                      sh -c 'psql -X -h 127.0.0.1 -p 54322 -U postgres -d postgres -qAt -v ON_ERROR_STOP=1 -v target="$DENIED_TABLE" -f /restore/classify.sql 2>/dev/null') || catalog_status=$?
+                    if [ "$catalog_status" -ne 0 ]; then
+                      echo "Denied-table catalog query: execution failed."
+                    else
+                      echo "Denied-table catalog query: executed."
+                    fi
                     if [ -z "$catalog_result" ]; then
                       echo "Denied-table catalog classification: unavailable or no match."
                     elif printf '%s\\n' "$catalog_result" | grep -qx managed; then
