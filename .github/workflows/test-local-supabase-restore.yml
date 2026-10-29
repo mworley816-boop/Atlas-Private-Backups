@@ -128,14 +128,16 @@ jobs:
                     # Query catalogs only, never user rows.
                     cat > "$RUNNER_TEMP/restore-files/classify.sql" <<'SQL'
           SELECT CASE
-            WHEN n.nspname IN ('auth','storage','realtime','supabase_functions','vault','extensions','graphql','_realtime') THEN 'managed'
-            WHEN n.nspname = 'public' THEN 'public'
+            WHEN count(*) = 0 THEN 'no-match'
+            WHEN count(*) > 1 THEN 'multiple-matches'
+            WHEN bool_or(n.nspname IN ('auth','storage','realtime','supabase_functions','vault','extensions','graphql','_realtime')) THEN 'managed'
+            WHEN bool_or(n.nspname = 'public') THEN 'public'
+            WHEN bool_or(n.nspname LIKE 'pg_%' OR n.nspname = 'information_schema') THEN 'system'
             ELSE 'other'
           END
           FROM pg_class c
           JOIN pg_namespace n ON n.oid = c.relnamespace
-          WHERE c.relname = :'target' AND c.relkind IN ('r','p')
-          ORDER BY 1;
+          WHERE c.relname = :'target' AND c.relkind IN ('r','p');
           SQL
                     catalog_status=0
                     catalog_result=$(docker run --rm --network host \
@@ -153,8 +155,16 @@ jobs:
                       echo "Denied-table catalog classification: Supabase-managed table."
                     elif printf '%s\\n' "$catalog_result" | grep -qx public; then
                       echo "Denied-table catalog classification: public application table."
+                    elif printf '%s\\n' "$catalog_result" | grep -qx multiple-matches; then
+                      echo "Denied-table catalog classification: multiple schemas share table name."
+                    elif printf '%s\\n' "$catalog_result" | grep -qx no-match; then
+                      echo "Denied-table catalog classification: no matching table."
+                    elif printf '%s\\n' "$catalog_result" | grep -qx system; then
+                      echo "Denied-table catalog classification: PostgreSQL system schema."
+                    elif printf '%s\\n' "$catalog_result" | grep -qx other; then
+                      echo "Denied-table catalog classification: other non-public schema."
                     else
-                      echo "Denied-table catalog classification: other or ambiguous."
+                      echo "Denied-table catalog classification: unexpected diagnostic output."
                     fi
                   fi
                 fi
