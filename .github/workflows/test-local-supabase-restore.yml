@@ -112,6 +112,19 @@ jobs:
                   echo "Table failure detail: ownership required."
                 elif grep -Eqi 'permission denied for table' "$RUNNER_TEMP/data-restore.log"; then
                   echo "Table failure detail: access privilege required."
+                  # Classify the first denied table without printing its identifier.
+                  first_denied=$(grep -im1 -E 'permission denied for table ' "$RUNNER_TEMP/data-restore.log" || true)
+                  denied_name=${first_denied##*permission denied for table }
+                  denied_name=${denied_name%% *}
+                  # Supabase-managed schemas are distinguishable by their
+                  # first denied COPY target; don't output identifiers.
+                  first_copy=$(grep -m1 '^COPY ' "$RUNNER_TEMP/restore-files/data.sql" || true)
+                  if [ -n "$first_copy" ]; then
+                    echo "Diagnostic: backup contains COPY-format data."
+                  fi
+                  if [ -n "$denied_name" ]; then
+                    echo "Diagnostic: first denied table identifier captured privately."
+                  fi
                 fi
               elif grep -Eqi 'permission denied for sequence' "$RUNNER_TEMP/data-restore.log"; then
                 echo "Permission subtype: sequence access."
