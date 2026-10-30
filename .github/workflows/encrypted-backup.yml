@@ -42,7 +42,7 @@ jobs:
           cd "$RUNNER_TEMP/atlas-backup"
           supabase db dump --db-url "$DATABASE_URL" --role-only -f roles.sql
           supabase db dump --db-url "$DATABASE_URL" -f schema.sql
-          supabase db dump --db-url "$DATABASE_URL" --data-only --use-copy -f data.sql
+          supabase db dump --db-url "$DATABASE_URL" --schema public --data-only --use-copy -f data.sql
           for file in roles.sql schema.sql data.sql; do test -s "$file" || { echo "Missing or empty export: $file"; exit 1; }; done
           sha256sum roles.sql schema.sql data.sql > SHA256SUMS
           printf 'Atlas AI-Coworker Supabase pre-deployment backup; UTC: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > README.txt
