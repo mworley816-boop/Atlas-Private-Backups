@@ -44,7 +44,7 @@ jobs:
           supabase db dump --db-url "$DATABASE_URL" -f schema.sql
           supabase db dump --db-url "$DATABASE_URL" --schema public --data-only --use-copy -f data.sql
           for file in roles.sql schema.sql data.sql; do test -s "$file" || { echo "Missing or empty export: $file"; exit 1; }; done
-          if ! grep -Eq '^COPY ("?public"?\\.)' data.sql; then
+          if ! grep -Eq '^COPY ("?public"?\.)' data.sql; then
             echo "FAIL: no public application COPY blocks; encrypted backup will not be uploaded."
             exit 1
           fi
