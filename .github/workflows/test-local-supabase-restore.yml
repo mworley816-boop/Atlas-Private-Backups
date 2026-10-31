@@ -251,12 +251,18 @@ jobs:
           public_copy_lines = 0
           copy_parenthesis_headers = 0
           copy_from_stdin_headers = 0
+          copy_has_space_before_paren = 0
+          copy_has_quote = 0
+          copy_has_schema_separator = 0
           with open(source, encoding="utf-8") as src:
               for line in src:
                   if line.startswith("COPY "):
                       copy_lines += 1
                       if "(" in line: copy_parenthesis_headers += 1
                       if "FROM stdin" in line: copy_from_stdin_headers += 1
+                      if " (" in line: copy_has_space_before_paren += 1
+                      if chr(34) in line: copy_has_quote += 1
+                      if "." in line.partition("(")[0]: copy_has_schema_separator += 1
                   if line.startswith("COPY public."):
                       public_copy_lines += 1
                   if current is None:
@@ -269,7 +275,7 @@ jobs:
                   else:
                       current[1] += 1
           if current is not None or not tables:
-              print(f"Integrity diagnostic: copy_headers={copy_lines}, public_copy_headers={public_copy_lines}, with_parenthesis={copy_parenthesis_headers}, from_stdin={copy_from_stdin_headers}, matched_blocks={len(tables)}, unterminated_block={current is not None}.")
+              print(f"Integrity diagnostic: copy_headers={copy_lines}, public_copy_headers={public_copy_lines}, with_parenthesis={copy_parenthesis_headers}, from_stdin={copy_from_stdin_headers}, space_before_parenthesis={copy_has_space_before_paren}, quoted_header={copy_has_quote}, qualified_header={copy_has_schema_separator}, matched_blocks={len(tables)}, unterminated_block={current is not None}.")
               raise SystemExit("FAIL: application COPY integrity metadata missing or incomplete.")
           with open(sql_path, "w") as sql, open(expected_path, "w") as expected:
               for table, count in tables:
