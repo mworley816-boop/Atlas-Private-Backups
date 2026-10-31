@@ -203,7 +203,7 @@ jobs:
                       in_copy = True
                   if in_copy and keep:
                       dst.write(line)
-                  if in_copy and line.rstrip("\\r\\n") == r"\\.":
+                  if in_copy and line.rstrip("\r\n") == r"\.":
                       in_copy = keep = False
           print(f"Backup SQL structure: COPY blocks={copy_count}; public={public_count}; other={other_count}.")
           if copy_count == 0:
