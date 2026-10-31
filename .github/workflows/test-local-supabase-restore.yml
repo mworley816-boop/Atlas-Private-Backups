@@ -244,7 +244,7 @@ jobs:
           source, sql_path, expected_path = sys.argv[1:]
           # PostgreSQL COPY headers may include quoted names; use the first
           # table token while validating that the statement is a public COPY.
-          header = re.compile(r'^COPY[ ]+(public[.](?:"[^"]+"|[A-Za-z_][A-Za-z_0-9]*))[ ]*[(]', re.I)
+          header = re.compile(r'^COPY[ ]+((?:public[.])?(?:"[^"]+"|[A-Za-z_][A-Za-z_0-9]*))[ ]*[(]', re.I)
           tables = []
           current = None
           copy_lines = 0
