@@ -242,13 +242,15 @@ jobs:
           import re
           import sys
           source, sql_path, expected_path = sys.argv[1:]
-          pattern = re.compile(r'^COPY\s+(public\.(?:"[^"]+"|[A-Za-z_][A-Za-z_0-9]*))\s*\(', re.I)
+          # PostgreSQL COPY headers may include quoted names; use the first
+          # table token while validating that the statement is a public COPY.
+          header = re.compile(r'^COPY[ ]+(public[.](?:"[^"]+"|[A-Za-z_][A-Za-z_0-9]*))[ ]*[(]', re.I)
           tables = []
           current = None
           with open(source, encoding="utf-8") as src:
               for line in src:
                   if current is None:
-                      match = pattern.match(line)
+                      match = header.match(line)
                       if match:
                           current = [match.group(1), 0]
                   elif line.strip() == chr(92) + ".":
@@ -261,7 +263,7 @@ jobs:
               raise SystemExit("FAIL: application COPY integrity metadata missing or incomplete.")
           with open(sql_path, "w") as sql, open(expected_path, "w") as expected:
               for table, count in tables:
-                  sql.write(f"SELECT COUNT(*) FROM {table};" + chr(10))
+                  sql.write("SELECT COUNT(*) FROM " + table + ";" + chr(10))
                   expected.write(str(count) + chr(10))
           print(f"Integrity check: prepared row-count comparisons for {len(tables)} application tables.")
           PY
