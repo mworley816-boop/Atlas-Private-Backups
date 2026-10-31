@@ -236,6 +236,46 @@ jobs:
             psql -X -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
             -qAt -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'" \
             > "$RUNNER_TEMP/public-table-count"
+          # Compare every public COPY block's row count with the restored table.
+          # Table identifiers and counts remain in runner-private files only.
+          python3 - "$RUNNER_TEMP/restore-files/data.sql" "$RUNNER_TEMP/restore-files/check-counts.sql" "$RUNNER_TEMP/restore-files/expected-counts" <<'PY'
+          import re, sys
+          source, sql_path, expected_path = sys.argv[1:]
+          pattern = re.compile(r'^COPY\\s+(public\\.(?:"[^"]+"|[A-Za-z_][A-Za-z_0-9]*))\\s*\\(', re.I)
+          tables, current = [], None
+          with open(source, encoding="utf-8") as src:
+              for line in src:
+                  if current is None:
+                      match = pattern.match(line)
+                      if match:
+                          current = [match.group(1), 0]
+                  elif line.rstrip("\\r\\n") == r"\\.":
+                      tables.append(current)
+                      current = None
+                  else:
+                      current[1] += 1
+          if current is not None or not tables:
+              raise SystemExit("FAIL: application COPY integrity metadata missing or incomplete.")
+          with open(sql_path, "w") as sql, open(expected_path, "w") as expected:
+              for table, count in tables:
+                  sql.write(f"SELECT COUNT(*) FROM {table};\\n")
+                  expected.write(f"{count}\\n")
+          print(f"Integrity check: prepared row-count comparisons for {len(tables)} application tables.")
+          PY
+          if ! docker run --rm --network host \
+            -e PGPASSWORD="$PGPASSWORD" \
+            -v "$RUNNER_TEMP/restore-files:/restore:ro" postgres:17 \
+            psql -X -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
+            -v ON_ERROR_STOP=1 -qAt -f /restore/check-counts.sql \
+            > "$RUNNER_TEMP/restore-files/actual-counts" 2> "$RUNNER_TEMP/integrity-errors.log"; then
+            echo "FAIL: restored application row-count queries could not complete."
+            exit 1
+          fi
+          if ! cmp -s "$RUNNER_TEMP/restore-files/expected-counts" "$RUNNER_TEMP/restore-files/actual-counts"; then
+            echo "FAIL: application row counts differ from encrypted backup."
+            exit 1
+          fi
+          echo "PASS: all application COPY row counts match restored tables."
           echo "PASS: application schema and data SQL restored to disposable local Supabase."
           echo "Public tables: $(cat "$RUNNER_TEMP/public-table-count")"
           echo "LIMITATION: roles.sql was not executed; Supabase managed services, Storage files, and end-to-end recovery are not validated."
@@ -247,4 +287,4 @@ jobs:
           cd "$RUNNER_TEMP/atlas-local" 2>/dev/null && supabase stop --no-backup >/dev/null 2>&1 || true
           rm -rf "$RUNNER_TEMP/restore-files" "$RUNNER_TEMP/backup.tar.gz" \
             "$RUNNER_TEMP/schema-restore.log" "$RUNNER_TEMP/data-restore.log" "$RUNNER_TEMP/public-only-restore.log" \
-            "$RUNNER_TEMP/supabase-start.log" "$RUNNER_TEMP/public-table-count"
+            "$RUNNER_TEMP/supabase-start.log" "$RUNNER_TEMP/public-table-count" "$RUNNER_TEMP/integrity-errors.log"
