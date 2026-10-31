@@ -241,7 +241,7 @@ jobs:
           python3 - "$RUNNER_TEMP/restore-files/data.sql" "$RUNNER_TEMP/restore-files/check-counts.sql" "$RUNNER_TEMP/restore-files/expected-counts" <<'PY'
           import re, sys
           source, sql_path, expected_path = sys.argv[1:]
-          pattern = re.compile(r'^COPY\\s+(public\\.(?:"[^"]+"|[A-Za-z_][A-Za-z_0-9]*))\\s*\\(', re.I)
+          pattern = re.compile(r'^COPY\s+(public\.(?:"[^"]+"|[A-Za-z_][A-Za-z_0-9]*))\s*\(', re.I)
           tables, current = [], None
           with open(source, encoding="utf-8") as src:
               for line in src:
@@ -258,8 +258,8 @@ jobs:
               raise SystemExit("FAIL: application COPY integrity metadata missing or incomplete.")
           with open(sql_path, "w") as sql, open(expected_path, "w") as expected:
               for table, count in tables:
-                  sql.write(f"SELECT COUNT(*) FROM {table};\\n")
-                  expected.write(f"{count}\\n")
+                  sql.write(f"SELECT COUNT(*) FROM {table};\n")
+                  expected.write(f"{count}\n")
           print(f"Integrity check: prepared row-count comparisons for {len(tables)} application tables.")
           PY
           if ! docker run --rm --network host \
