@@ -239,17 +239,19 @@ jobs:
           # Compare every public COPY block's row count with the restored table.
           # Table identifiers and counts remain in runner-private files only.
           python3 - "$RUNNER_TEMP/restore-files/data.sql" "$RUNNER_TEMP/restore-files/check-counts.sql" "$RUNNER_TEMP/restore-files/expected-counts" <<'PY'
-          import re, sys
+          import re
+          import sys
           source, sql_path, expected_path = sys.argv[1:]
           pattern = re.compile(r'^COPY\s+(public\.(?:"[^"]+"|[A-Za-z_][A-Za-z_0-9]*))\s*\(', re.I)
-          tables, current = [], None
+          tables = []
+          current = None
           with open(source, encoding="utf-8") as src:
               for line in src:
                   if current is None:
                       match = pattern.match(line)
                       if match:
                           current = [match.group(1), 0]
-                  elif line.rstrip("\\r\\n") == r"\\.":
+                  elif line.strip() == chr(92) + ".":
                       tables.append(current)
                       current = None
                   else:
@@ -258,8 +260,8 @@ jobs:
               raise SystemExit("FAIL: application COPY integrity metadata missing or incomplete.")
           with open(sql_path, "w") as sql, open(expected_path, "w") as expected:
               for table, count in tables:
-                  sql.write(f"SELECT COUNT(*) FROM {table};\n")
-                  expected.write(f"{count}\n")
+                  sql.write(f"SELECT COUNT(*) FROM {table};" + chr(10))
+                  expected.write(str(count) + chr(10))
           print(f"Integrity check: prepared row-count comparisons for {len(tables)} application tables.")
           PY
           if ! docker run --rm --network host \
